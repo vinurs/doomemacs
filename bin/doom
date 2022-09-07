@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 :; # -*- mode: emacs-lisp; lexical-binding: t -*-
 :; case "$EMACS" in *term*) EMACS=emacs ;; *) EMACS="${EMACS:-emacs}" ;; esac
-:; emacs="$EMACS -q --no-site-file --no-x-resources --no-splash --batch"
+:; emacs="$EMACS -q --no-site-file --batch"
 :; tmpdir=`$emacs --eval '(princ (temporary-file-directory))' 2>/dev/null`
 :; [ -z "$tmpdir" ] && { >&2 echo "Error: failed to run Emacs with command '$EMACS'"; >&2 echo; >&2 echo "Are you sure Emacs is installed and in your \$PATH?"; exit 1; }
 :; export __DOOMPID="${__DOOMPID:-$$}"
@@ -95,8 +95,8 @@
 ;; UX: Abort if the user is using 'doom' as root, unless ~/.emacs.d is owned by
 ;;   root, in which case we assume the user genuinely wants root to be their
 ;;   primary user account for Emacs.
-(when (equal (user-real-uid) 0)
-  (unless (= 0 (file-attribute-user-id (file-attributes user-emacs-directory)))
+(when (equal 0 (user-real-uid))
+  (unless (equal 0 (file-attribute-user-id (file-attributes doom-emacs-dir)))
     (message
      (concat
       "Error: this script was executed as root, which is likely not what you want.\n"
@@ -105,7 +105,7 @@
       "If this really *is* what you want, then change the owner of your Emacs\n"
       "config to root:\n\n"
       ;; TODO Add cmd.exe/powershell commands
-      "  chown root:root -R " (abbreviate-file-name user-emacs-directory) "\n\n"
+      "  chown root:root -R " (abbreviate-file-name doom-emacs-dir) "\n\n"
       "Aborting..."))
     (kill-emacs 2)))
 
@@ -243,12 +243,9 @@ SEE ALSO:
 ;; can do so in .doomrc or .doomproject.
 (load! doom-module-init-file doom-user-dir t)
 
+;; There are a lot of CLIs, and some have expensive initialization, so best we
+;; load them lazily.
 (let ((dir (doom-path doom-core-dir "cli")))
-  ;; It'd be simple to just load these files directly, but because there could
-  ;; be a lot of them (and some of them have expensive dependencies), I use
-  ;; `defautoload!' to load them lazily.
-  (add-to-list 'doom-cli-load-path dir)
-
   ;; Library for generating autoloads files for Doom modules & packages.
   (load! "autoloads" dir)
 
@@ -261,7 +258,7 @@ SEE ALSO:
 
     (defgroup! "Config Management"
       :docs "Commands for maintaining your Doom Emacs configuration."
-      (defautoload! ((sync s refresh re)))
+      (defautoload! ((sync s)))
       (defautoload! ((upgrade up)))
       (defautoload! (env))
       (defautoload! ((build b purge p rollback)) "packages")
