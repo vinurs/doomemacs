@@ -74,6 +74,13 @@
 ;; - The user may have a noexec flag set on /tmp, so pass the exit script to
 ;;   /bin/sh rather than executing them directly.
 
+(setq url-gateway-method 'socks)
+(setq url-proxy-services
+      '(("http"     . "127.0.0.1:7890")
+       ("https"     . "127.0.0.1:7890")))
+(setq socks-server '("Default server" "127.0.0.1" 7890 5))
+
+
 ;; Doom's core sets up everything we need; including `doom-*-dir' variables,
 ;; universal defaults, and autoloads for doom-*-initialize functions.
 (condition-case e

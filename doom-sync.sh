@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+rm -rf eln-cache
+rm -rf .local
+
 export ALL_PROXY=socks5://127.0.0.1:7890
 export https_proxy=http://127.0.0.1:7890
 
