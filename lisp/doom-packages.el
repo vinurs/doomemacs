@@ -465,6 +465,7 @@ ones."
           (cl-loop for key being the hash-keys of doom-modules
                    for path = (doom-module-path (car key) (cdr key) packages-file)
                    for doom--current-module = key
+                   for doom--current-flags = (doom-module-get (car key) (cdr key) :flags)
                    do (doom--read-packages path nil 'noerror)))
         (doom--read-packages private-packages all-p 'noerror)))
     (cl-remove-if-not
@@ -553,15 +554,16 @@ elsewhere."
     (cl-callf map-delete plist :built-in)
     (cl-callf plist-put plist :ignore built-in))
   `(let* ((name ',name)
-          (plist (cdr (assq name doom-packages))))
+          (plist (cdr (assq name doom-packages)))
+          (dir (dir!)))
      ;; Record what module this declaration was found in
      (let ((module-list (plist-get plist :modules))
-           (module ',(doom-module-from-path)))
+           (module (doom-module-from-path dir)))
        (unless (member module module-list)
          (cl-callf plist-put plist :modules
                    (append module-list
                            (list module)
-                           (when (file-in-directory-p ,(dir!) doom-user-dir)
+                           (when (file-in-directory-p dir doom-user-dir)
                              '((:user . modules)))
                            nil))))
      ;; Merge given plist with pre-existing one
@@ -580,7 +582,7 @@ elsewhere."
              (when local-repo
                (cl-callf plist-put plist :recipe
                          (plist-put recipe :local-repo
-                                    (let ((local-path (expand-file-name local-repo ,(dir!))))
+                                    (let ((local-path (expand-file-name local-repo dir)))
                                       (if (file-directory-p local-path)
                                           local-path
                                         local-repo)))))))

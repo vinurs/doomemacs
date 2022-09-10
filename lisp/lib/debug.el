@@ -7,14 +7,13 @@
 
 ;;;###autoload
 (defvar doom-debug-variables
-  '(;; Doom variables
+  `(;; Doom variables
     (doom-print-level . debug)
+    (doom-print-message-level . info)
 
     ;; Emacs variables
     async-debug
     debug-on-error
-    (debugger . doom-debugger)
-    garbage-collection-messages
     gcmh-verbose
     init-file-debug
     jka-compr-verbose
@@ -53,11 +52,11 @@ symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
                     var (if (not enabled)
                             (prog1 (get var 'initial-value)
                               (put var 'initial-value nil))
-                          (put var 'initial-value (symbol-value var))
+                          (put var 'initial-value (default-toplevel-value var))
                           val))
                  (add-to-list 'doom-debug--undefined-vars var))))
             ((if (boundp var)
-                 (set-default var enabled)
+                 (set-default-toplevel-value var enabled)
                (add-to-list 'doom-debug--undefined-vars var)))))
     (when (called-interactively-p 'any)
       (when (fboundp 'explain-pause-mode)
@@ -73,21 +72,49 @@ symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
            (advice-add #'run-hooks :override #'doom-run-hooks)
            ;; Add time stamps to lines in *Messages*
            (advice-add #'message :before #'doom--timestamped-message-a)
+           ;; The constant debug output from GC is mostly unhelpful. I still
+           ;; want it logged to *Messages*, just out of the echo area.
+           (advice-add #'gcmh-idle-garbage-collect :around #'doom-debug-shut-up-a)
            (add-variable-watcher 'doom-debug-variables #'doom-debug--watch-vars-h)
            (add-hook 'after-load-functions #'doom-debug--watch-vars-h))
           (t
            (advice-remove #'run-hooks #'doom-run-hooks)
            (advice-remove #'message #'doom--timestamped-message-a)
+           (advice-remove #'gcmh-idle-garbage-collect #'doom-debug-shut-up-a)
            (remove-variable-watcher 'doom-debug-variables #'doom-debug--watch-vars-h)
            (remove-hook 'after-load-functions #'doom-debug--watch-vars-h)
            (message "Debug mode disabled!")))))
 
+(defun doom-debug-shut-up-a (fn &rest args)
+  "Suppress output from FN, even in debug mode."
+  (let (init-file-debug)
+    (apply #'doom-shut-up-a fn args)))
+
 
 ;;
-;;; Custom debuggers
+;;; Custom debugger
+
+;; HACK: I advise `debug' instead of changing `debugger' to hide the debugger
+;;   itself from the backtrace. Doing it manually would require reimplementing
+;;   most of `debug', which is a lot of unnecessary work, when I only want to
+;;   decorate the original one slightly.
+(defadvice! doom-debugger-a (fn &rest args)
+  :around #'debug
+  ;; Without `doom-debug-mode', be as vanilla as possible.
+  (if (not doom-debug-mode)
+      (apply fn args)
+    ;; Work around Emacs's heuristic (in eval.c) for detecting errors in the
+    ;; debugger, which would run this handler again on subsequent calls. Taken
+    ;; from `ert--run-test-debugger'.
+    (if (and noninteractive (fboundp 'doom-cli-debugger))
+        (apply #'doom-cli-debugger args)
+      ;; TODO: Write backtraces to file
+      ;; TODO: Write backtrace to a buffer in case recursive error interupts the
+      ;;   debugger (happens more often than it should).
+      (apply fn args))))
 
 (autoload 'backtrace-get-frames "backtrace")
-
+;;;###autoload
 (defun doom-backtrace ()
   "Return a stack trace as a list of `backtrace-frame' objects."
   ;; (let* ((n 0)
@@ -134,35 +161,19 @@ symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
               backtrace))
       file)))
 
-(defun doom-debugger (&rest args)
-  "Enter `debugger' in interactive sessions, `doom-cli-debugger' otherwise.
-
-Writes backtraces to file and ensures the backtrace is recorded, so the user can
-always access it."
-  (let ((backtrace (doom-backtrace)))
-    ;; Work around Emacs's heuristic (in eval.c) for detecting errors in the
-    ;; debugger, which would run this handler again on subsequent calls. Taken
-    ;; from `ert--run-test-debugger'.
-    (cl-incf num-nonmacro-input-events)
-    (if (and noninteractive (fboundp 'doom-cli-debugger))
-        (apply #'doom-cli-debugger args)
-      ;; TODO Write backtraces to file
-      ;; TODO Write backtrace to a buffer in case recursive error interupts the
-      ;;   debugger (happens more often than it should).
-      (apply #'debug args))))
-
 
 ;;
 ;;; Time-stamped *Message* logs
 
-(defun doom--timestamped-message-a (format-string &rest args)
+(defun doom--timestamped-message-a (format-string &rest _args)
   "Advice to run before `message' that prepends a timestamp to each message.
 
 Activate this advice with:
 (advice-add 'message :before 'doom--timestamped-message-a)"
   (when (and (stringp format-string)
-             message-log-max
-             (not (string-equal format-string "%s%s")))
+             message-log-max  ; if nil, logging is disabled
+             (not (equal format-string "%s%s"))
+             (not (equal format-string "\n")))
     (with-current-buffer "*Messages*"
       (let ((timestamp (format-time-string "[%F %T] " (current-time)))
             (deactivate-mark nil))

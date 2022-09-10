@@ -139,7 +139,8 @@ in."
       (explain! "The second directory will be ignored, as it has lower precedence.")))
 
   (print! (start "Checking for stale elc files..."))
-  (elc-check-dir doom-emacs-dir)
+  (elc-check-dir doom-core-dir)
+  (elc-check-dir doom-local-dir)
 
   (print! (start "Checking for problematic git global settings..."))
   (if (executable-find "git")
@@ -247,7 +248,9 @@ in."
                       (let (doom-doctor--errors
                             doom-doctor--warnings)
                         (condition-case-unless-debug ex
-                            (let ((doctor-file   (doom-module-path (car key) (cdr key) "doctor.el"))
+                            (let ((doom--current-module key)
+                                  (doom--current-flags (plist-get plist :flags))
+                                  (doctor-file   (doom-module-path (car key) (cdr key) "doctor.el"))
                                   (packages-file (doom-module-path (car key) (cdr key) "packages.el")))
                               (cl-loop with doom-output-indent = 6
                                        for name in (let (doom-packages
