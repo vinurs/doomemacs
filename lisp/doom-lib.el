@@ -243,19 +243,20 @@ TRIGGER-HOOK is a list of quoted hooks and/or sharp-quoted functions."
 ;;
 ;;; Sugars
 
-(defun dir! ()
-  "Returns the directory of the emacs lisp file this function is called from."
-  (when-let (path (file!))
-    (directory-file-name (file-name-directory path))))
+(defmacro file! ()
+  "Return the file of the file this macro was called."
+  (or
+   ;; REVIEW: Use `macroexp-file-name' once 27 support is dropped.
+   (let ((file (car (last current-load-list))))
+     (if (stringp file) file))
+   (bound-and-true-p byte-compile-current-file)
+   load-file-name
+   buffer-file-name   ; for `eval'
+   (error "file!: cannot deduce the current file path")))
 
-(defun file! ()
-  "Return the emacs lisp file this function is called from."
-  (cond (load-in-progress load-file-name)
-        ((bound-and-true-p byte-compile-current-file))
-        ((stringp (car-safe current-load-list))
-         (car current-load-list))
-        (buffer-file-name)
-        ((error "Cannot get this file-path"))))
+(defmacro dir! ()
+  "Return the directory of the file this macro was called."
+  (file-name-directory (macroexpand '(file!))))
 
 ;; REVIEW Should I deprecate this? The macro's name is so long...
 (defalias 'letenv! 'with-environment-variables)
@@ -589,7 +590,7 @@ things you want byte-compiled in them! Like function/macro definitions."
                       (require package nil 'noerror))
                   #'progn
                 #'with-no-warnings)
-              `(eval-after-load ',package ',(macroexp-progn body))))
+              `(with-eval-after-load ',package ,@body)))
     (let ((p (car package)))
       (cond ((memq p '(:or :any))
              (macroexp-progn
