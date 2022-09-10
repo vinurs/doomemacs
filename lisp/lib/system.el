@@ -8,7 +8,7 @@
           (IS-MAC     'macos)
           ((ignore-errors
              (with-file-contents! "/etc/os-release"
-               (when (re-search-backward "^ID=\"?\\([^\"\n]+\\)\"?" nil t)
+               (when (re-search-forward "^ID=\"?\\([^\"\n]+\\)\"?" nil t)
                  (intern (downcase (match-string 1)))))))
           ;; A few redundancies in case os-release fails us
           ((file-exists-p "/etc/debian_version")
@@ -37,7 +37,7 @@
         (format "NixOS %s" (sh "nixos-version")))
        ((ignore-errors
           (with-file-contents! "/etc/os-release"
-            (when (re-search-backward "^PRETTY_NAME=\"?\\([^\"\n]+\\)\"?" nil t)
+            (when (re-search-forward "^PRETTY_NAME=\"?\\([^\"\n]+\\)\"?" nil t)
               (match-string 1)))))
        ((when-let (files (doom-glob "/etc/*-release"))
           (truncate-string-to-width
@@ -83,26 +83,31 @@
   "Return the max number of processing units on this system.
 Tries to be portable. Returns 1 if cannot be determined."
   (with-memoization (get 'doom-system-cpus 'cached-value)
-    (let ((cpus
-           (cond ((fboundp 'w32-get-nproc)
-                  (w32-get-nproc))
-                 ((getenv "NUMBER_OF_PROCESSORS"))
-                 ((executable-find "nproc")
-                  (doom-call-process "nproc"))
-                 ((executable-find "sysctl")
-                  (doom-call-process "sysctl" "-n" "hw.ncpu")))))
-      (max
-       1 (or (cl-typecase cpus
-               (integer cpus)
-               (string
-                (condition-case _
-                    (string-to-number cpus)
-                  (wrong-type-argument
-                   (user-error "NUMBER_OF_PROCESSORS contains an invalid value: %S"
-                               cpus))))
-               (cons
-                (if (zerop (car cpus))
-                    (string-to-number (cdr cpus))
-                  (user-error "Failed to look up number of processors, because:\n\n%s"
-                              (cdr cpus)))))
-             1)))))
+    (if (fboundp 'num-processors)
+        (num-processors) ; added in Emacs 28.1
+      (let ((cpus
+             (cond ((fboundp 'w32-get-nproc)
+                    (w32-get-nproc))
+                   ((getenv "NUMBER_OF_PROCESSORS"))
+                   ((executable-find "nproc")
+                    (doom-call-process "nproc"))
+                   ((executable-find "sysctl")
+                    (doom-call-process "sysctl" "-n" "hw.ncpu")))))
+        (max
+         1 (or (cl-typecase cpus
+                 (integer cpus)
+                 (string
+                  (condition-case _
+                      (string-to-number cpus)
+                    (wrong-type-argument
+                     (user-error "NUMBER_OF_PROCESSORS contains an invalid value: %S"
+                                 cpus))))
+                 (cons
+                  (if (zerop (car cpus))
+                      (string-to-number (cdr cpus))
+                    (user-error "Failed to look up number of processors, because:\n\n%s"
+                                (cdr cpus)))))
+               1))))))
+
+(provide 'doom-lib '(system))
+;;; system.el ends here
