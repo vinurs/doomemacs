@@ -88,7 +88,7 @@
 (condition-case e
     (let* ((bin-dir (file-name-directory (file-truename load-file-name)))
            (init-file (expand-file-name "../early-init.el" bin-dir)))
-      (or (and (load init-file nil 'nomessage)
+      (or (and (load init-file nil 'nomessage 'nosuffix)
                (featurep 'doom))
           (user-error "Failed to load Doom from %s" init-file)))
   ;; Prevent ugly backtraces for trivial errors
@@ -145,11 +145,24 @@ ENVIRONMENT VARIABLES:
     option also sets this variable.
 
   `$DOOMPROFILE'
-    (Not implemented yet) Which Doom profile to activate (default: \"current\").
+    Which Doom profile to activate (default: \"_@0\"). The `--profile' option
+    also sets this variable.
 
-  `$DOOMPROFILESDIR'
-    (Not implemented yet) Where to find or write generated Doom profiles
-    (default: `$EMACSDIR'/profiles).
+  `$DOOMPROFILELOADFILE'
+    Doom generates a profile loader script on 'doom sync' or 'doom profiles
+    sync'. By default, this file is written to and loaded from
+    $EMACSDIR/profiles/load.el. Set this envvar to change that. Note that this
+    envvar must be in scope for both interactive and non-interactive sessions
+    for it to be effective. This is especially useful for folks on Nix/Guix, who
+    have deployed Doom to a read-only directory.
+
+    Note: this file *must* end with a .el extension. It will be byte-compiled
+    after it is generated.
+
+  `$DOOMPROFILELOADPATH'
+    A colon-delimited (semi-colon on Windows) list of profile config files or
+    directories under which Doom will search for implicit profiles. See
+    `var:doom-profile-load-path' for its default value.
 
 EXIT CODES:
   0        Successful run
@@ -175,7 +188,8 @@ SEE ALSO:
 
 (defcli! :before
     ((force?   ("-!" "--force")   "Suppress prompts by auto-accepting their consequences")
-     (debug?   ("-D" "--debug")   "Enable verbose output")
+     (debug?   ("-D" "--debug")   "Enable debug output")
+     (verbose? ("-v" "--verbose") "Enable verbose output")
      (doomdir  ("--doomdir" dir)  "Use Doom config living in `DIR' (e.g. ~/.doom.d)")
      (emacsdir ("--emacsdir" dir) "Use Doom install living in `DIR' (e.g. ~/.emacs.d)")
      (pager    ("--pager" cmd)    "Pager command to use for large output")
@@ -202,13 +216,15 @@ SEE ALSO:
     .doomrc file in the current project tree."
   (when bench?
     (setq doom-cli-benchmark-threshold 'always))
+  (unless init-file-debug ; debug-mode implies verbose
+    (when verbose?
+      (setq doom-print-minimum-level 'info)))
   (when color?
     (setq doom-print-backend (if (eq color? :yes) 'ansi)))
   (when pager
     (setq doom-cli-pager pager))
   (when force?
-    (setf (doom-cli-context-suppress-prompts-p context) t)
-    (doom-log "User requested all prompts be suppressed"))
+    (setf (doom-cli-context-suppress-prompts-p context) t))
   ;; For these settings to take full effect, the script must be restarted:
   (when (or debug?
             profile
@@ -248,72 +264,66 @@ SEE ALSO:
 
 ;; There are a lot of CLIs, and some have expensive initialization, so best we
 ;; load them lazily.
-(let ((dir (doom-path doom-core-dir "cli")))
-  ;; Library for generating autoloads files for Doom modules & packages.
-  (load! "autoloads" dir)
+(defcli-group!
+  :prefix 'doom
+  ;; Import this for implicit 'X help' commands for your script:
+  (defcli-alias! ((help h)) (:root :help))
+  ;; And suggest its use when errors occur.
+  (add-to-list 'doom-help-commands "%p h[elp] %c")
 
-  (defgroup!
-    :prefix 'doom
-    ;; Import this for implicit 'X help' commands for your script:
-    (defalias! ((help h)) (:root :help))
-    ;; And suggest its use when errors occur.
-    (add-to-list 'doom-help-commands "%p h[elp] %c")
+  (defcli-group! "Config Management"
+    :docs "Commands for maintaining your Doom Emacs configuration."
+    (defcli-autoload! ((sync s)))
+    (defcli-autoload! ((profiles profile)))
+    (defcli-autoload! ((upgrade up)))
+    (defcli-autoload! (env))
+    (defcli-autoload! ((build b purge p rollback)) "packages")
+    (defcli-autoload! ((install i)))
+    (defcli-autoload! ((compile c)))
+    (defcli-autoload! (clean) "compile")
 
-    (defgroup! "Config Management"
-      :docs "Commands for maintaining your Doom Emacs configuration."
-      (defautoload! ((sync s)))
-      (defautoload! ((upgrade up)))
-      (defautoload! (env))
-      (defautoload! ((build b purge p rollback)) "packages")
-      (defautoload! ((install i)))
-      (defautoload! ((compile c)))
-      (defautoload! (clean) "compile")
+    ;; TODO Post-3.0 commands
+    ;; (load! "gc" dir)
+    ;; (load! "module" dir)
+    ;; (load! "nuke" dir)
+    ;; (load! "package" dir)
+    ;; (load! "profile" dir)
+    ;; (defcli-obsolete! ((compile c)) (sync "--compile") "v3.0.0")
+    ;; (defcli-obsolete! ((build b))   (sync "--rebuild") "v3.0.0")
+    )
 
-      ;; TODO Post-3.0 commands
-      ;; (load! "gc" dir)
-      ;; (load! "module" dir)
-      ;; (load! "nuke" dir)
-      ;; (load! "package" dir)
-      ;; (load! "profile" dir)
-      ;; (defobsolete! ((compile c)) (sync "--compile") "v3.0.0")
-      ;; (defobsolete! ((build b))   (sync "--rebuild") "v3.0.0")
-      )
+  (defcli-group! "Diagnostics"
+    :docs "Commands for troubleshooting and debugging Doom."
+    (defcli-autoload! ((doctor doc)))
+    (defcli-autoload! (info))
+    (defcli-alias! ((version v)) (:root :version)))
 
-    (defgroup! "Diagnostics"
-      :docs "Commands for troubleshooting and debugging Doom."
-      (defautoload! ((doctor doc)))
-      (defautoload! (info))
-      (defalias! ((version v)) (:root :version)))
+  (defcli-group! "Development"
+    :docs "Commands for developing or launching Doom."
+    (defcli-autoload! (ci))
+    (defcli-autoload! (make))
+    (defcli-autoload! (run))
 
-    (defgroup! "Development"
-      :docs "Commands for developing or launching Doom."
-      (defautoload! (ci))
-      (defautoload! (make))
-      (defautoload! (run))
+    ;; FIXME Test framework
+    ;; (load! "test" dir)
+    )
 
-      ;; FIXME Test framework
-      ;; (load! "test" dir)
-      )
+  (let ((cli-file "cli"))
+    (defcli-group! "Module commands"
+      (dolist (key (doom-module-list))
+        (when-let (path (doom-module-expand-path (car key) (cdr key) cli-file))
+          (defcli-group! :prefix (format "+%s" (cdr key))
+            (doom-load path t)))))
 
-    (let ((cli-file "cli"))
-      (defgroup! "Module commands"
-        (dolist (key (hash-table-keys doom-modules))
-          (when-let (path (plist-get (gethash key doom-modules) :path))
-            (defgroup! :prefix (format "+%s" (cdr key))
-              (load! cli-file path t)))))
+    (load! cli-file doom-user-dir t))
 
-      (doom-log "Loading $DOOMDIR/cli.el")
-      (load! cli-file doom-user-dir t))
-
-    ;; Allow per-project Doom settings in .doom files.
-    (let (doomrc)
-      (cond
-       ((setq doomrc (getenv "DOOMRC"))
-        (load! doomrc))
-       ((setq doomrc (locate-dominating-file default-directory ".doomrc"))
-        (load! ".doomrc" doomrc)))
-      (when doomrc
-        (doom-log "Loaded doomrc: %s" doomrc)))))
+  ;; Allow per-project Doom settings in .doom files.
+  (let (doomrc)
+    (cond
+     ((setq doomrc (getenv "DOOMRC"))
+      (load! doomrc))
+     ((setq doomrc (locate-dominating-file default-directory ".doomrc"))
+      (load! ".doomrc" doomrc)))))
 
 
 ;;

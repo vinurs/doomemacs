@@ -67,11 +67,10 @@ If the glob ends in a slash, only returns matching directories."
   (declare (side-effect-free t))
   (let* (case-fold-search
          file-name-handler-alist
-         (path (apply #'file-name-concat segments))
-         (full? (file-name-absolute-p path)))
+         (path (apply #'file-name-concat segments)))
     (if (string-suffix-p "/" path)
-        (cl-delete-if-not #'file-directory-p (file-expand-wildcards (substring path 0 -1) full?))
-      (file-expand-wildcards path full?))))
+        (cl-delete-if-not #'file-directory-p (file-expand-wildcards (substring path 0 -1)))
+      (file-expand-wildcards path))))
 
 ;;;###autoload
 (define-obsolete-function-alias 'doom-dir 'doom-path "3.0.0")
@@ -262,7 +261,12 @@ If BEG and/or END are integers, only that region will be read from FILE."
           (insert-file-contents-literally buffer-file-name nil beg end))
         (pcase by
           ('insert
-           (insert-into-buffer old-buffer)
+           (if (fboundp 'insert-into-buffer)
+               (insert-into-buffer old-buffer)
+             ;; DEPRECATED: Remove fallback when 27.x support is dropped.
+             (let ((input (buffer-substring-no-properties (point-min) (point-max))))
+               (with-current-buffer old-buffer
+                 (insert input))))
            t)
           ('buffer-string
            (buffer-substring-no-properties (point-min) (point-max)))

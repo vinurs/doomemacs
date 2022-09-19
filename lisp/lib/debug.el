@@ -8,8 +8,7 @@
 ;;;###autoload
 (defvar doom-debug-variables
   `(;; Doom variables
-    (doom-print-level . debug)
-    (doom-print-message-level . info)
+    (doom-print-minimum-level . debug)
 
     ;; Emacs variables
     async-debug
@@ -28,36 +27,37 @@
 Each entry can be a variable symbol or a cons cell whose CAR is the variable
 symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
 
-(defvar doom-debug--undefined-vars nil)
+(defvar doom-debug--unbound-vars nil)
 
 (defun doom-debug--watch-vars-h (&rest _)
-  (when-let (bound-vars (cl-delete-if-not #'boundp doom-debug--undefined-vars))
-    (doom-log "New variables available: %s" bound-vars)
-    (let ((message-log-max nil))
-      (doom-debug-mode -1)
-      (doom-debug-mode +1))))
+  (when-let (vars (copy-sequence doom-debug--unbound-vars))
+    (setq doom-debug--unbound-vars nil)
+    (mapc #'doom-debug--set-var vars)))
+
+(defun doom-debug--set-var (spec)
+  (cond ((listp spec)
+         (pcase-let ((`(,var . ,val) spec))
+           (if (boundp var)
+               (set-default
+                var (if (not doom-debug-mode)
+                        (prog1 (get var 'initial-value)
+                          (put var 'initial-value nil))
+                      (doom-log "debug:vars: %s = %S" var (default-toplevel-value var))
+                      (put var 'initial-value (default-toplevel-value var))
+                      val))
+             (add-to-list 'doom-debug--unbound-vars spec))))
+        ((boundp spec)
+         (doom-log "debug:vars: %s = %S" spec doom-debug-mode)
+         (set-default-toplevel-value spec doom-debug-mode))
+        ((add-to-list 'doom-debug--unbound-vars (cons spec t)))))
 
 ;;;###autoload
 (define-minor-mode doom-debug-mode
   "Toggle `debug-on-error' and `init-file-debug' for verbose logging."
-  :init-value init-file-debug
   :global t
   (let ((enabled doom-debug-mode))
-    (setq doom-debug--undefined-vars nil)
-    (dolist (var doom-debug-variables)
-      (cond ((listp var)
-             (pcase-let ((`(,var . ,val) var))
-               (if (boundp var)
-                   (set-default
-                    var (if (not enabled)
-                            (prog1 (get var 'initial-value)
-                              (put var 'initial-value nil))
-                          (put var 'initial-value (default-toplevel-value var))
-                          val))
-                 (add-to-list 'doom-debug--undefined-vars var))))
-            ((if (boundp var)
-                 (set-default-toplevel-value var enabled)
-               (add-to-list 'doom-debug--undefined-vars var)))))
+    (doom-log "debug: enabled!")
+    (mapc #'doom-debug--set-var doom-debug-variables)
     (when (called-interactively-p 'any)
       (when (fboundp 'explain-pause-mode)
         (explain-pause-mode (if enabled +1 -1))))
@@ -65,7 +65,8 @@ symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
     ;; potentially define one of `doom-debug-variables'), in case some of them
     ;; aren't defined when `doom-debug-mode' is first loaded.
     (cond (enabled
-           (message "Debug mode enabled! (Run 'M-x view-echo-area-messages' to open the log buffer)")
+           (unless noninteractive
+             (message "Debug mode enabled! (Run 'M-x view-echo-area-messages' to open the log buffer)"))
            ;; Produce more helpful (and visible) error messages from errors
            ;; emitted from hooks (particularly mode hooks), that usually go
            ;; unnoticed otherwise.
@@ -83,6 +84,7 @@ symbol and CDR is the value to set it to when `doom-debug-mode' is activated.")
            (advice-remove #'gcmh-idle-garbage-collect #'doom-debug-shut-up-a)
            (remove-variable-watcher 'doom-debug-variables #'doom-debug--watch-vars-h)
            (remove-hook 'after-load-functions #'doom-debug--watch-vars-h)
+           (doom-log "debug: disabled")
            (message "Debug mode disabled!")))))
 
 (defun doom-debug-shut-up-a (fn &rest args)
@@ -258,6 +260,11 @@ ready to be pasted in a bug report on github."
                                   (substring emacs-repository-version 0 9))
                              (symlink-path doom-emacs-dir))))
         (doom . ,(list doom-version
+                       (if doom-profile
+                           (format "PROFILE=%s@%s"
+                                   (car doom-profile)
+                                   (cdr doom-profile))
+                         "PROFILE=_@0")
                        (sh "git" "log" "-1" "--format=%D %h %ci")
                        (symlink-path doom-user-dir)))
         (shell  . ,(abbrev-path shell-file-name))
@@ -285,11 +292,12 @@ ready to be pasted in a bug report on github."
                             'symlinked-doomdir)
                         (if (and (stringp custom-file) (file-exists-p custom-file))
                             'custom-file)
-                        (if (doom-files-in `(,@doom-modules-dirs
-                                             ,doom-core-dir
-                                             ,doom-user-dir)
-                                           :type 'files :match "\\.elc$")
-                            'byte-compiled-config)))))
+                        (if (doom-files-in doom-user-dir :type 'files :match "\\.elc$")
+                            'compiled-user-config)
+                        (if (doom-files-in doom-core-dir :type 'files :match "\\.elc$")
+                            'compiled-core)
+                        (if (doom-files-in doom-modules-dirs :type 'files :match "\\.elc$")
+                            'compiled-modules)))))
         (custom
          ,@(when (and (stringp custom-file)
                       (file-exists-p custom-file))
@@ -297,15 +305,15 @@ ready to be pasted in a bug report on github."
                       if (eq type 'theme-value)
                       collect var)))
         (modules
-         ,@(or (cl-loop with cat = nil
-                        for key being the hash-keys of doom-modules
-                        if (or (not cat)
-                               (not (eq cat (car key))))
-                        do (setq cat (car key))
-                        and collect cat
+         ,@(or (cl-loop with lastcat = nil
+                        for (cat . mod) in (cddr (doom-module-list))
+                        if (or (not lastcat)
+                               (not (eq lastcat cat)))
+                        do (setq lastcat cat)
+                        and collect lastcat
                         collect
-                        (let* ((flags (doom-module-get cat (cdr key) :flags))
-                               (path  (doom-module-get cat (cdr key) :path))
+                        (let* ((flags (doom-module-get lastcat mod :flags))
+                               (path  (doom-module-get lastcat mod :path))
                                (module
                                 (append
                                  (cond ((null path)
@@ -313,8 +321,8 @@ ready to be pasted in a bug report on github."
                                        ((not (file-in-directory-p path doom-modules-dir))
                                         (list '&user)))
                                  (if flags
-                                     `(,(cdr key) ,@flags)
-                                   (list (cdr key))))))
+                                     `(,mod ,@flags)
+                                   (list mod)))))
                           (if (= (length module) 1)
                               (car module)
                             module)))

@@ -1,4 +1,6 @@
-;;; doom-editor.el -*- lexical-binding: t; -*-
+;;; doom-editor.el --- defaults for text editing in Doom -*- lexical-binding: t; -*-
+;;; Commentary:
+;;; Code:
 
 (defvar doom-detect-indentation-excluded-modes
   '(fundamental-mode pascal-mode so-long-mode doom-docs-org-mode)
@@ -407,12 +409,10 @@ files, so this replace calls to `pp' with the much faster `prin1'."
 (use-package! server
   :when (display-graphic-p)
   :after-call doom-first-input-hook doom-first-file-hook focus-out-hook
-  :custom (server-auth-dir (concat doom-emacs-dir "server/"))
   :defer 1
-  :init
+  :config
   (when-let (name (getenv "EMACS_SERVER_NAME"))
     (setq server-name name))
-  :config
   (unless (server-running-p)
     (server-start)))
 

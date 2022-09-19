@@ -2,6 +2,21 @@
 ;;; Commentary:
 ;;; Code:
 
+;;; Custom error types
+(define-error 'doom-error "An unexpected Doom error")
+(define-error 'doom-nosync-error "Doom hasn't been initialized yet; did you remember to run 'doom sync' in the shell?" 'doom-error)
+(define-error 'doom-core-error "Unexpected error in Doom's core" 'doom-error)
+(define-error 'doom-hook-error "Error in a Doom startup hook" 'doom-error)
+(define-error 'doom-autoload-error "Error in Doom's autoloads file" 'doom-error)
+(define-error 'doom-user-error "Error caused by user's config or system" 'doom-error)
+(define-error 'doom-module-error "Error in a Doom module" 'doom-error)
+(define-error 'doom-package-error "Error with packages" 'doom-error)
+(define-error 'doom-profile-error "Error while processing profiles" 'doom-error)
+
+
+;;
+;;; Logging
+
 (defmacro doom-log (output &rest args)
   "Log a message in *Messages*.
 
@@ -13,9 +28,11 @@ debug mode is off."
      (let ((inhibit-message (not init-file-debug)))
        (message
         "%s" (propertize
-              (format (concat "* [%.06f] " ,output)
-                      (float-time (time-subtract (current-time) before-init-time))
-                      ,@args)
+              ;; Byte compiler: don't complain about more args than %-sequences.
+              (with-no-warnings
+                (format (concat "* %.06f: " ,output)
+                        (float-time (time-subtract (current-time) before-init-time))
+                        ,@args))
               'face 'font-lock-doc-face)))))
 
 
@@ -115,44 +132,37 @@ at the values with which this function was called."
   "Load PATH and handle any Doom errors that arise from it.
 
 If NOERROR, don't throw an error if PATH doesn't exist."
-  (doom-log "Loading %S..." path)
+  (doom-log "load: %s %s" (abbreviate-file-name path) noerror)
   (condition-case-unless-debug e
       (load path noerror 'nomessage)
-    ((doom-error file-missing)
+    (doom-error
      (signal (car e) (cdr e)))
     (error
-     (unless (file-name-absolute-p path)
-       (when-let (newpath (locate-file path load-path))
-         (setq path newpath)))
-     (cl-destructuring-bind (err . dir)
-         (cond ((not path)
-                (cons 'error path))
-               ((not (featurep 'doom))
-                (cons 'error (file-name-directory path)))
-               ((file-in-directory-p path (expand-file-name "cli" doom-core-dir))
-                (cons 'doom-cli-error doom-emacs-dir))
-               ((file-in-directory-p path doom-core-dir)
-                (cons 'doom-core-error doom-emacs-dir))
-               ((file-in-directory-p path doom-user-dir)
-                (cons 'doom-user-error doom-user-dir))
-               ((cons 'doom-module-error doom-emacs-dir)))
-       (signal err (list (unless (equal path dir)
-                           (file-relative-name (or path "") dir))
-                         e))))))
+     (setq path (locate-file path load-path (get-load-suffixes)))
+     (signal (cond ((not (and path (featurep 'doom)))
+                    'error)
+                   ((file-in-directory-p path (expand-file-name "cli" doom-core-dir))
+                    'doom-cli-error)
+                   ((file-in-directory-p path doom-core-dir)
+                    'doom-core-error)
+                   ((file-in-directory-p path doom-user-dir)
+                    'doom-user-error)
+                   ('doom-module-error))
+             (list path e)))))
 
 (defun doom-require (feature &optional filename noerror)
   "Like `require', but handles and enhances Doom errors.
 
 Can also load Doom's subfeatures, e.g. (doom-require 'doom-lib 'files)"
-  (or (if (and filename (symbolp filename))
-          (let ((subfeature filename))
-            (setq filename
-                  (file-name-concat doom-core-dir
-                                    (string-remove-prefix "doom-" (symbol-name feature))
-                                    (symbol-name filename)))
-            (and (memq subfeature (get feature 'subfeatures)) t))
-        (featurep feature))
-      (doom-load (or filename (symbol-name feature)) noerror)))
+  (let ((subfeature (if (symbolp filename) filename)))
+    (or (featurep feature subfeature)
+        (doom-load
+         (if subfeature
+             (file-name-concat doom-core-dir
+                               (string-remove-prefix "doom-" (symbol-name feature))
+                               (symbol-name filename))
+           (symbol-name feature))
+         noerror))))
 
 (defun doom-load-envvars-file (file &optional noerror)
   "Read and set envvars from FILE.
@@ -212,7 +222,7 @@ HOOK-VAR is triggered, it is reset to nil.
 HOOK-VAR is a quoted hook.
 TRIGGER-HOOK is a list of quoted hooks and/or sharp-quoted functions."
   (dolist (hook trigger-hooks)
-    (let ((fn (intern (format "%s-init-on-%s-h" hook-var hook))))
+    (let ((fn (make-symbol (format "chain-%s-to-%s-h" hook-var hook))))
       (fset
        fn (lambda (&rest _)
             ;; Only trigger this after Emacs has initialized.
@@ -238,6 +248,22 @@ TRIGGER-HOOK is a list of quoted hooks and/or sharp-quoted functions."
              (advice-add 'after-find-file :before fn '((depth . -101))))
             ((add-hook hook fn -101)))
       fn)))
+
+(defun doom-compile-functions (&rest fns)
+  "Queue FNS to be byte/natively-compiled after a brief delay."
+  (with-memoization (get 'doom-compile-function 'timer)
+    (run-with-idle-timer
+     1.5 t (fn! (when-let (fn (pop fns))
+                  (doom-log "compile-functions: %s" fn)
+                  (or (if (featurep 'native-compile)
+                          (or (subr-native-elisp-p (indirect-function fn))
+                              (ignore-errors (native-compile fn))))
+                      (byte-code-function-p fn)
+                      (let (byte-compile-warnings)
+                        (byte-compile fn))))
+                (unless fns
+                  (cancel-timer (get 'doom-compile-function 'timer))
+                  (put 'doom-compile-function 'timer nil))))))
 
 
 ;;
@@ -354,6 +380,38 @@ this macro's BODY will only be evaluated during byte-compilation."
   (declare (indent 0))
   (when (bound-and-true-p byte-compile-current-file)
     (ignore (eval (macroexp-progn body) t))))
+
+(defmacro versionp! (v1 comp v2 &rest comps)
+  "Perform compound version checks.
+
+Compares V1 and V2 with COMP (a math comparison operator: <, <=, =, /=, >=, >).
+Can chain these comparisons by adding more (COMPn Vn) pairs afterwards.
+
+\(fn V1 COMP V2 [COMPn Vn]...)"
+  (let ((forms t))
+    (push v2 comps)
+    (push comp comps)
+    `(let ((v2 (version-to-list ,v1)))
+       ,(progn
+          (cl-loop for (v op) on (nreverse comps) by #'cddr
+                   for not? = (not (memq op '(> >= /=)))
+                   for fn = (or (get 'versionp! op)
+                                (error "Invalid comparator %s" op))
+                   for form = `(,fn v1 v2)
+                   do (if not? (setq form `(not ,form)))
+                   do (setq v1 'v2
+                            v2 `(version-to-list ,v)
+                            forms `(let ((v1 ,v1)
+                                         (v2 ,v2))
+                                     (and (not ,form) ,forms))))
+          forms))))
+;; PERF: Store in symbol plist for ultra-fast lookups at this scale.
+(setplist 'versionp! '(>  version-list-<
+                       >= version-list-<=
+                       <  version-list-<
+                       <= version-list-<=
+                       =  version-list-=
+                       /= version-list-=))
 
 ;;; Closure factories
 (defmacro lambda! (arglist &rest body)
@@ -666,13 +724,8 @@ again.
 HOOK-OR-FUNCTION can be a quoted hook or a sharp-quoted function (which will be
 advised)."
   (declare (indent 1))
-  (let ((append (if (eq (car forms) :after) (pop forms)))
-        ;; Avoid `make-symbol' and `gensym' here because an interned symbol is
-        ;; easier to debug in backtraces (and is visible to `describe-function')
-        (fn (intern (format "doom--transient-%d-h"
-                            (put 'add-transient-hook! 'counter
-                                 (1+ (or (get 'add-transient-hook! 'counter)
-                                         0)))))))
+  (let ((append? (if (eq (car forms) :after) (pop forms)))
+        (fn (gensym "doom-transient-hook")))
     `(let ((sym ,hook-or-function))
        (defun ,fn (&rest _)
          ,(format "Transient hook for %S" (doom-unquote hook-or-function))
@@ -682,10 +735,10 @@ advised)."
                  ((symbolp sym)   (remove-hook sym #',fn))))
          (unintern ',fn nil))
        (cond ((functionp sym)
-              (advice-add ,hook-or-function ,(if append :after :before) #',fn))
+              (advice-add ,hook-or-function ,(if append? :after :before) #',fn))
              ((symbolp sym)
               (put ',fn 'permanent-local-hook t)
-              (add-hook sym #',fn ,append))))))
+              (add-hook sym #',fn ,append?))))))
 
 (defmacro add-hook! (hooks &rest rest)
   "A convenience macro for adding N functions to M hooks.
@@ -764,8 +817,7 @@ If N and M = 1, there's no benefit to using this macro over `remove-hook'.
             collect `(defun ,fn (&rest _)
                        ,(format "%s = %s" var (pp-to-string val))
                        (setq-local ,var ,val))
-            collect `(remove-hook ',hook #',fn) ; ensure set order
-            collect `(add-hook ',hook #',fn))))
+            collect `(add-hook ',hook #',fn -90))))
 
 (defmacro unsetq-hook! (hooks &rest vars)
   "Unbind setq hooks on HOOKS for VARS.
