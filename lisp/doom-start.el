@@ -302,13 +302,19 @@ If RETURN-P, return the message as a string instead of displaying it."
   (doom-load-envvars-file doom-env-file 'noerror))
 
 ;;; Last minute setup
-(add-hook 'after-change-major-mode-hook #'doom-run-local-var-hooks-h 100)
-(add-hook 'hack-local-variables-hook #'doom-run-local-var-hooks-h)
 (add-hook 'doom-after-init-hook #'doom-load-packages-incrementally-h)
 (add-hook 'doom-after-init-hook #'doom-display-benchmark-h 110)
 (doom-run-hook-on 'doom-first-buffer-hook '(find-file-hook doom-switch-buffer-hook))
 (doom-run-hook-on 'doom-first-file-hook   '(find-file-hook dired-initial-position-hook))
 (doom-run-hook-on 'doom-first-input-hook  '(pre-command-hook))
+;; PERF: Activate these later, otherwise they'll fire for every buffer created
+;;   between now and the end of startup.
+(add-hook! 'after-init-hook
+  (defun doom-init-local-var-hooks-h ()
+    ;; These fire `MAJOR-MODE-local-vars-hook' hooks, which is a Doomism. See
+    ;; the `MODE-local-vars-hook' section above.
+    (add-hook 'after-change-major-mode-hook #'doom-run-local-var-hooks-h 100)
+    (add-hook 'hack-local-variables-hook #'doom-run-local-var-hooks-h)))
 
 ;;; Load $DOOMDIR/init.el early
 ;; TODO: Catch errors
@@ -358,22 +364,25 @@ If RETURN-P, return the message as a string instead of displaying it."
                    ;; Compiling them in one place is a big reduction in startup
                    ;; time, and by keeping a history of them, you get a snapshot
                    ;; of your config in time.
-                   (file-name-concat doom-profile-dir (format "init.%d.elc" emacs-major-version))))
+                   (file-name-concat
+                    doom-profile-dir (format "init.%d.elc" emacs-major-version)))
+                  ;; If the config is being reloaded, let's pretend it hasn't be
+                  ;; initialized by unsetting this (see note in
+                  ;; `doom-profile--generate-load-modules' for details).
+                  doom-init-time)
               ;; If `user-init-file' is t, then `load' will store the name of
-              ;; the file that it loads into `user-init-file'.
+              ;; the next file it loads into `user-init-file'.
               (setq user-init-file t)
               (when init-file-name
                 (load init-file-name 'noerror 'nomessage 'nosuffix))
-              ;; If `user-file-name' is `t' when `load' is called, it will
-              ;; change `user-file-name' to the loaded file (assuming it
-              ;; successfully loaded).
+              ;; If it's still `t', then it failed to load the profile initfile.
+              ;; This likely means the user has forgotten to run `doom sync'!
               (when (eq user-init-file t)
                 (signal 'doom-nosync-error (list init-file-name)))
               ;; If we loaded a compiled file, set `user-init-file' to the
               ;; source version if that exists.
               (setq user-init-file
-                    (concat (string-remove-suffix (format ".%d.elc" emacs-major-version)
-                                                  user-init-file)
+                    (concat (string-remove-suffix ".elc" user-init-file)
                             ".el"))))
         ;; TODO: Add safe-mode profile.
         ;; (error
