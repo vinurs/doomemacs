@@ -9,6 +9,7 @@
 (defvar doom-debug-variables
   `(;; Doom variables
     (doom-print-minimum-level . debug)
+    (doom-inhibit-log . nil)
 
     ;; Emacs variables
     async-debug
@@ -245,8 +246,9 @@ ready to be pasted in a bug report on github."
                (abbreviate-file-name path)))
             (defun symlink-path (file)
               (format "%s%s" (abbrev-path file)
-                      (if (file-symlink-p file) ""
-                        (concat " -> " (abbrev-path (file-truename file)))))))
+                      (if (file-symlink-p file)
+                          (concat " -> " (abbrev-path (file-truename file)))
+                        ""))))
       `((generated . ,(format-time-string "%b %d, %Y %H:%M:%S"))
         (system . ,(delq
                     nil (list (doom-system-distro-version)
@@ -306,7 +308,7 @@ ready to be pasted in a bug report on github."
                       collect var)))
         (modules
          ,@(or (cl-loop with lastcat = nil
-                        for (cat . mod) in (cddr (doom-module-list))
+                        for (cat . mod) in (seq-filter #'cdr (doom-module-list))
                         if (or (not lastcat)
                                (not (eq lastcat cat)))
                         do (setq lastcat cat)
@@ -331,7 +333,7 @@ ready to be pasted in a bug report on github."
          ,@(condition-case e
                (mapcar
                 #'cdr (doom--collect-forms-in
-                       (doom-path doom-user-dir "packages.el")
+                       (doom-path doom-user-dir doom-module-packages-file)
                        "package!"))
              (error (format "<%S>" e))))
         (unpin
@@ -339,7 +341,7 @@ ready to be pasted in a bug report on github."
                (mapcan #'identity
                        (mapcar
                         #'cdr (doom--collect-forms-in
-                               (doom-path doom-user-dir "packages.el")
+                               (doom-path doom-user-dir doom-module-packages-file)
                                "unpin!")))
              (error (list (format "<%S>" e)))))
         (elpa

@@ -1060,7 +1060,9 @@ between the two."
          "L" #'org-insert-all-links
          "s" #'org-store-link
          "S" #'org-insert-last-stored-link
-         "t" #'org-toggle-link-display)
+         "t" #'org-toggle-link-display
+         (:when (modulep! :os macos)
+          "g" #'org-mac-link-get-link))
         (:prefix ("P" . "publish")
          "a" #'org-publish-all
          "f" #'org-publish-current-file
@@ -1351,7 +1353,7 @@ between the two."
       ))
 
   ;;; Custom org modules
-  (dolist (flag doom--current-flags)
+  (dolist (flag (doom-module-context-get 'flags))
     (load! (concat "contrib/" (substring (symbol-name flag) 1)) nil t))
 
   ;; Add our general hooks after the submodules, so that any hooks the
@@ -1417,7 +1419,7 @@ between the two."
   ;; In case the user has eagerly loaded org from their configs
   (when (and (featurep 'org)
              (not byte-compile-current-file))
-    (unless doom-reloading-p
+    (unless (doom-context-p 'reload)
       (message "`org' was already loaded by the time lang/org loaded, this may cause issues"))
     (run-hooks 'org-load-hook))
 

@@ -17,23 +17,34 @@
 ;;
 ;;; Logging
 
-(defmacro doom-log (output &rest args)
+(defvar doom-inhibit-log (not (or noninteractive init-file-debug))
+  "If non-nil, suppress `doom-log' output.")
+
+(defun doom--log (text &rest args)
+  (let ((inhibit-message (not init-file-debug))
+        (absolute? (string-prefix-p ":" text)))
+    (apply #'message
+           (propertize (concat "* %.06f:%s" (if (not absolute?) ":") text)
+                       'face 'font-lock-doc-face)
+           (float-time (time-subtract (current-time) before-init-time))
+           (mapconcat
+            (lambda (x) (format "%s" x))
+            (unless absolute?
+              (append (cons '* (remq t (reverse doom-context)))
+                      (if (bound-and-true-p doom-module-context)
+                          (let ((key (doom-module-context-key)))
+                            (delq nil (list (car key) (cdr key)))))))
+            ":")
+           args)))
+
+(defmacro doom-log (message &rest args)
   "Log a message in *Messages*.
 
 Does not emit the message in the echo area. This is a macro instead of a
-function to prevent the potentially expensive execution of its arguments when
-debug mode is off."
+function to prevent the potentially expensive evaluation of its arguments when
+debug mode is off. Return non-nil."
   (declare (debug t))
-  `(when (or init-file-debug noninteractive)
-     (let ((inhibit-message (not init-file-debug)))
-       (message
-        "%s" (propertize
-              ;; Byte compiler: don't complain about more args than %-sequences.
-              (with-no-warnings
-                (format (concat "* %.06f: " ,output)
-                        (float-time (time-subtract (current-time) before-init-time))
-                        ,@args))
-              'face 'font-lock-doc-face)))))
+  `(unless doom-inhibit-log (doom--log ,message ,@args)))
 
 
 ;;
@@ -147,7 +158,11 @@ If NOERROR, don't throw an error if PATH doesn't exist."
                     'doom-core-error)
                    ((file-in-directory-p path doom-user-dir)
                     'doom-user-error)
-                   ('doom-module-error))
+                   ((file-in-directory-p path doom-profile-dir)
+                    'doom-profile-error)
+                   ((file-in-directory-p path doom-modules-dir)
+                    'doom-module-error)
+                   ('doom-error))
              (list path e)))))
 
 (defun doom-require (feature &optional filename noerror)
@@ -189,9 +204,11 @@ unreadable. Returns the names of envvars that were changed."
               (set-time-zone-rule newtz))))
         env))))
 
+(defvar doom--hook nil)
 (defun doom-run-hook (hook)
   "Run HOOK (a hook function) with better error handling.
 Meant to be used with `run-hook-wrapped'."
+  (doom-log "hook:%s: run %s" (or doom--hook '*) hook)
   (condition-case-unless-debug e
       (funcall hook)
     (error
@@ -204,7 +221,8 @@ Meant to be used with `run-hook-wrapped'."
 Is used as advice to replace `run-hooks'."
   (dolist (hook hooks)
     (condition-case-unless-debug e
-        (run-hook-wrapped hook #'doom-run-hook)
+        (let ((doom--hook hook))
+          (run-hook-wrapped hook #'doom-run-hook))
       (doom-hook-error
        (unless debug-on-error
          (lwarn hook :error "Error running hook %S because: %s"
@@ -222,11 +240,13 @@ HOOK-VAR is triggered, it is reset to nil.
 HOOK-VAR is a quoted hook.
 TRIGGER-HOOK is a list of quoted hooks and/or sharp-quoted functions."
   (dolist (hook trigger-hooks)
-    (let ((fn (make-symbol (format "chain-%s-to-%s-h" hook-var hook))))
+    (let ((fn (make-symbol (format "chain-%s-to-%s-h" hook-var hook)))
+          running?)
       (fset
        fn (lambda (&rest _)
             ;; Only trigger this after Emacs has initialized.
             (when (and after-init-time
+                       (not running?)
                        (or (daemonp)
                            ;; In some cases, hooks may be lexically unset to
                            ;; inhibit them during expensive batch operations on
@@ -235,6 +255,7 @@ TRIGGER-HOOK is a list of quoted hooks and/or sharp-quoted functions."
                            ;; hook wasn't invoked interactively.
                            (and (boundp hook)
                                 (symbol-value hook))))
+              (setq running? t)  ; prevent infinite recursion
               (doom-run-hooks hook-var)
               (set hook-var nil))))
       (cond ((daemonp)
@@ -372,15 +393,6 @@ See `eval-if!' for details on this macro's purpose."
   (when (eval cond)
     (macroexp-progn body)))
 
-(defmacro eval-when-compile! (&rest body)
-  "Evaluate BODY *only* during byte-compilation.
-
-Unlike `eval-when-compile', which is equivalent to `progn' in interpreted code,
-this macro's BODY will only be evaluated during byte-compilation."
-  (declare (indent 0))
-  (when (bound-and-true-p byte-compile-current-file)
-    (ignore (eval (macroexp-progn body) t))))
-
 (defmacro versionp! (v1 comp v2 &rest comps)
   "Perform compound version checks.
 
@@ -443,15 +455,13 @@ ARGLIST."
          (allow-other-keys arglist))
       ,@body)))
 
-(let ((i 1))
-  (dolist (sym '(%2 %3 %4 %5 %6 %7 %8 %9))
-    (put 'fn! sym (cl-incf i))))
+(setplist 'doom--fn-crawl '(%2 2 %3 3 %4 4 %5 5 %6 6 %7 7 %8 8 %9 9))
 (defun doom--fn-crawl (data args)
   (cond ((symbolp data)
          (when-let
              (pos (cond ((eq data '%*) 0)
                         ((memq data '(% %1)) 1)
-                        ((get 'fn! data))))
+                        ((get 'doom--fn-crawl data))))
            (when (and (= pos 1)
                       (aref args 1)
                       (not (eq data (aref args 1))))
@@ -581,7 +591,7 @@ instead of `setopt'. Unlike `setq', this triggers custom setters on variables.
 Unlike `setopt', this won't needlessly pull in dependencies."
   (macroexp-progn
    (cl-loop for (var val) on settings by 'cddr
-            collect `(funcall (or (get ',var 'custom-set) #'set)
+            collect `(funcall (or (get ',var 'custom-set) #'set-default-toplevel-value)
                               ',var ,val))))
 
 (defmacro delq! (elt list &optional fetcher)
@@ -932,6 +942,29 @@ The previous values will be be restored upon exit."
      ,@(cl-loop for var in variables
                 collect `(setenv ,(car var) ,(cadr var)))
      ,@body))
+
+;; Introduced in Emacs 28.1
+(defbackport! defun file-name-with-extension (filename extension)
+  "Return FILENAME modified to have the specified EXTENSION.
+The extension (in a file name) is the part that begins with the last \".\".
+This function removes any existing extension from FILENAME, and then
+appends EXTENSION to it.
+
+EXTENSION may include the leading dot; if it doesn't, this function
+will provide it.
+
+It is an error if FILENAME or EXTENSION is empty, or if FILENAME
+is in the form of a directory name according to `directory-name-p'.
+
+See also `file-name-sans-extension'."
+  (let ((extn (string-trim-left extension "[.]")))
+    (cond ((string-empty-p filename)
+           (error "Empty filename"))
+          ((string-empty-p extn)
+           (error "Malformed extension: %s" extension))
+          ((directory-name-p filename)
+           (error "Filename is a directory: %s" filename))
+          ((concat (file-name-sans-extension filename) "." extn)))))
 
 ;; Introduced in Emacs 29+
 (defbackport! defmacro with-memoization (place &rest code)

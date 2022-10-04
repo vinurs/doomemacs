@@ -36,10 +36,11 @@
 ;;     > $EMACSDIR/lisp/doom.el
 ;;       - $EMACSDIR/lisp/doom-lib.el
 ;;     > $EMACSDIR/lisp/doom-start.el
-;;       - $EMACSDIR/doom-{keybinds,ui,projects,editor}.el
 ;;       - hook: `doom-before-init-hook'
 ;;       - $DOOMDIR/init.el
-;;   > $XDG_DATA_HOME/doom/$PROFILE/@/curr/init.el   (replaces $EMACSDIR/init.el)
+;;   - hook: `before-init-hook'
+;;   > $XDG_DATA_HOME/doom/$PROFILE/@/$VERSION/init.el   (replaces $EMACSDIR/init.el)
+;;     - $EMACSDIR/doom-{keybinds,ui,projects,editor}.el
 ;;     - hook: `doom-before-modules-init-hook'
 ;;     - {$DOOMDIR,$EMACSDIR}/modules/*/*/init.el
 ;;     - hook: `doom-after-modules-init-hook'
@@ -48,12 +49,11 @@
 ;;     - hook: `doom-after-modules-config-hook'
 ;;     - $DOOMDIR/config.el
 ;;     - `custom-file' or $DOOMDIR/custom.el
-;;   > The rest of `command-line' (Emacs startup)
-;;     - hook: `after-init-hook'
-;;     - hook: `emacs-startup-hook'
-;;     - hook: `window-setup-hook'
-;;     - hook: `doom-init-ui-hook'
-;;     - hook: `doom-after-init-hook'
+;;   - hook: `after-init-hook'
+;;   - hook: `emacs-startup-hook'
+;;   - hook: `window-setup-hook'
+;;   - hook: `doom-init-ui-hook'
+;;   - hook: `doom-after-init-hook'
 ;;   > After startup is complete:
 ;;     - On first input:              `doom-first-input-hook'
 ;;     - On first switched-to buffer: `doom-first-buffer-hook'
@@ -86,7 +86,8 @@
           (concat "Alternatively, either update your $PATH environment variable to include the\n"
                   "path of the desired Emacs executable OR alter the $EMACS environment variable\n"
                   "to specify the exact path or command needed to invoke Emacs."
-                  (when-let (command (ignore-errors (file-name-nondirectory (cadr (member "--load" command-line-args)))))
+                  (when-let ((script (cadr (member "--load" command-line-args)))
+                             (command (file-name-nondirectory script)))
                     (concat " For example:\n\n"
                             "  $ EMACS=/path/to/valid/emacs " command " ...\n"
                             "  $ EMACS=\"/Applications/Emacs.app/Contents/MacOS/Emacs\" " command " ...\n"
@@ -160,8 +161,11 @@
   "Current version of Doom Emacs core.")
 
 ;; DEPRECATED: Remove these when the modules are moved out of core.
-(defconst doom-modules-version "22.09.0-pre"
+(defconst doom-modules-version "22.10.0-pre"
   "Current version of Doom Emacs.")
+
+(defvar doom-init-time nil
+  "The time it took, in seconds, for Doom Emacs to initialize.")
 
 (defconst doom-profile
   (if-let (profile (getenv-internal "DOOMPROFILE"))
@@ -310,9 +314,11 @@ users).")
 ;; Here are Doom's hackiest (and least offensive) startup optimizations. They
 ;; exploit implementation details and unintended side-effects, and will change
 ;; often between major Emacs releases. However, I disable them if this is a
-;; daemon session (where startup time matters less) or in debug-mode (to
-;; mitigate interference with our debugging).
-(unless (or (daemonp) init-file-debug)
+;; daemon session (where startup time matters less).
+;;
+;; Most of these have been tested on Linux and on fairly fast machines (with
+;; SSDs), so your mileage may vary depending on your hardware.
+(unless (daemonp)
   ;; PERF: `file-name-handler-alist' is consulted on each call to `require',
   ;;   `load', or various file/io functions (like `expand-file-name' or
   ;;   `file-remote-p'). You get a noteable boost to startup time by unsetting
@@ -333,6 +339,8 @@ users).")
             (list (rassq 'jka-compr-handler old-value))))
     ;; Make sure the new value survives any current let-binding.
     (set-default-toplevel-value 'file-name-handler-alist file-name-handler-alist)
+    ;; Remember it so it can be reset where needed.
+    (put 'file-name-handler-alist 'initial-value old-value)
     ;; COMPAT: ...but restore `file-name-handler-alist' later, because it is
     ;;   needed for handling encrypted or compressed files, among other things.
     (add-hook! 'emacs-startup-hook :depth 101
@@ -357,6 +365,11 @@ users).")
     ;; PERF,UX: Remove "For information about GNU Emacs..." message at startup.
     ;;   It's redundant with our dashboard and incurs a premature redraw.
     (advice-add #'display-startup-echo-area-message :override #'ignore)
+    ;; PERF: Suppress the vanilla startup screen completely. We've disabled it
+    ;;   with `inhibit-startup-screen', but it would still initialize anyway.
+    ;;   This involves some file IO and/or bitmap work (depending on the frame
+    ;;   type) that we can no-op for a free 50-100ms boost in startup time.
+    (advice-add #'display-startup-screen :override #'ignore)
 
     ;; PERF: Shave seconds off startup time by starting the scratch buffer in
     ;;   `fundamental-mode', rather than, say, `org-mode' or `text-mode', which
@@ -365,78 +378,156 @@ users).")
     (setq initial-major-mode 'fundamental-mode
           initial-scratch-message nil)
 
-    ;; PERF: Inexplicably, `tty-run-terminal-initialization' can sometimes take
-    ;;   2-3s when starting up Emacs in the terminal. Whatever slows it down at
-    ;;   startup doesn't appear to affect it if it's called a little later in
-    ;;   the startup process, so that's what I do.
-    ;; REVIEW: This optimization is not well understood. Investigate it!
     (unless initial-window-system
-      (advice-add #'tty-run-terminal-initialization :override #'ignore)
-      (add-hook! 'window-setup-hook
-        (defun doom--reset-tty-run-terminal-initialization-h ()
-          (advice-remove #'tty-run-terminal-initialization #'ignore)
-          (tty-run-terminal-initialization (selected-frame) nil t))))
+      ;; PERF: Inexplicably, `tty-run-terminal-initialization' can sometimes
+      ;;   take 2-3s when starting up Emacs in the terminal. Whatever slows it
+      ;;   down at startup doesn't appear to affect it if it's called a little
+      ;;   later in the startup process, so that's what I do.
+      ;; REVIEW: This optimization is not well understood. Investigate it!
+      (define-advice tty-run-terminal-initialization (:override (&rest _) defer)
+        (advice-remove #'tty-run-terminal-initialization #'tty-run-terminal-initialization@defer)
+        (add-hook 'window-setup-hook
+                  (doom-partial #'tty-run-terminal-initialization
+                                (selected-frame) nil t))))
 
-    ;; PERF,UX: Site files tend to use `load-file', which emits "Loading X..."
-    ;;   messages in the echo area. Writing to the echo-area triggers a
-    ;;   redisplay, which can be expensive during startup. This may also cause
-    ;;   an flash of white when creating the first frame.
-    (define-advice load-file (:override (file) silence)
-      (load file nil 'nomessage))
-    ;; COMPAT: But undo our `load-file' advice later, as to limit the scope of
-    ;;   any edge cases it could induce.
-    (define-advice startup--load-user-init-file (:before (&rest _) undo-silence)
-      (advice-remove #'load-file #'load-file@silence))
+    (unless init-file-debug
+      ;; PERF,UX: Site files tend to use `load-file', which emits "Loading X..."
+      ;;   messages in the echo area. Writing to the echo-area triggers a
+      ;;   redisplay, which can be expensive during startup. This may also cause
+      ;;   an flash of white when creating the first frame.
+      (define-advice load-file (:override (file) silence)
+        (load file nil 'nomessage))
+      ;; COMPAT: But undo our `load-file' advice later, as to limit the scope of
+      ;;   any edge cases it could induce.
+      (define-advice startup--load-user-init-file (:before (&rest _) undo-silence)
+        (advice-remove #'load-file #'load-file@silence))
 
-    ;; PERF: `load-suffixes' and `load-file-rep-suffixes' are consulted on each
-    ;;   `require' and `load'. Doom won't load any dmodules this early, so omit
-    ;;   .so for a small startup boost. This is later restored in doom-start.
-    (put 'load-suffixes 'initial-value (default-toplevel-value 'load-suffixes))
-    (put 'load-file-rep-suffixes 'initial-value (default-toplevel-value 'load-file-rep-suffixes))
-    (set-default-toplevel-value 'load-suffixes '(".elc" ".el"))
-    (set-default-toplevel-value 'load-file-rep-suffixes '(""))
-    ;; COMPAT: Undo any problematic startup optimizations; from this point, I make
-    ;;   no assumptions about what might be loaded in userland.
-    (add-hook! 'doom-before-init-hook
-      (defun doom--reset-load-suffixes-h ()
-        (setq load-suffixes (get 'load-suffixes 'initial-value)
-              load-file-rep-suffixes (get 'load-file-rep-suffixes 'initial-value))))
+      ;; PERF: `load-suffixes' and `load-file-rep-suffixes' are consulted on each
+      ;;   `require' and `load'. Doom won't load any dmodules this early, so omit
+      ;;   .so for a small startup boost. This is later restored in doom-start.
+      (put 'load-suffixes 'initial-value (default-toplevel-value 'load-suffixes))
+      (put 'load-file-rep-suffixes 'initial-value (default-toplevel-value 'load-file-rep-suffixes))
+      (set-default-toplevel-value 'load-suffixes '(".elc" ".el"))
+      (set-default-toplevel-value 'load-file-rep-suffixes '(""))
+      ;; COMPAT: Undo any problematic startup optimizations; from this point, I make
+      ;;   no assumptions about what might be loaded in userland.
+      (add-hook! 'doom-before-init-hook
+        (defun doom--reset-load-suffixes-h ()
+          (setq load-suffixes (get 'load-suffixes 'initial-value)
+                load-file-rep-suffixes (get 'load-file-rep-suffixes 'initial-value))))
 
-    ;; PERF: The mode-line procs a couple dozen times during startup. This is
-    ;;   normally quite fast, but disabling the default mode-line and reducing the
-    ;;   update delay timer seems to stave off ~30-50ms.
-    (put 'mode-line-format 'initial-value (default-toplevel-value 'mode-line-format))
-    (setq-default mode-line-format nil)
-    (dolist (buf (buffer-list))
-      (with-current-buffer buf (setq mode-line-format nil)))
-    ;; PERF,UX: Premature redisplays can substantially affect startup times and
-    ;;   produce ugly flashes of unstyled Emacs.
-    (setq-default inhibit-redisplay t
-                  inhibit-message t)
-    ;; COMPAT: Then reset it with advice, because `startup--load-user-init-file'
-    ;;   will never be interrupted by errors. And if these settings are left
-    ;;   set, Emacs could appear frozen or garbled.
-    (define-advice startup--load-user-init-file (:after (&rest _) undo-inhibit-vars)
-      (setq-default inhibit-redisplay nil
-                    inhibit-message nil)
-      (unless (default-toplevel-value 'mode-line-format)
-        (setq-default mode-line-format (get 'mode-line-format 'initial-value))))
+      ;; PERF: Doom uses `defcustom' to indicate variables that users are expected
+      ;;   to reconfigure. Trouble is it fires off initializers meant to
+      ;;   accommodate any user attempts to configure them before they were
+      ;;   defined. This is unnecessary before $DOOMDIR/init.el is loaded, so I
+      ;;   disable them until it is.
+      (setq custom-dont-initialize t)
+      (add-hook! 'doom-before-init-hook
+        (defun doom--reset-custom-dont-initialize-h ()
+          (setq custom-dont-initialize nil)))
 
-    ;; PERF: Doom disables the UI elements by default, so that there's less for
-    ;;   the frame to initialize. However, the toolbar is still populated
-    ;;   regardless, so I lazy load it until tool-bar-mode is actually used.
-    (advice-add #'tool-bar-setup :override #'ignore)
-    (define-advice startup--load-user-init-file (:before (&rest _) defer-tool-bar-setup)
-      (advice-remove #'tool-bar-setup #'ignore)
-      (add-transient-hook! 'tool-bar-mode (tool-bar-setup)))
+      ;; PERF: The mode-line procs a couple dozen times during startup. This is
+      ;;   normally quite fast, but disabling the default mode-line and reducing the
+      ;;   update delay timer seems to stave off ~30-50ms.
+      (put 'mode-line-format 'initial-value (default-toplevel-value 'mode-line-format))
+      (setq-default mode-line-format nil)
+      (dolist (buf (buffer-list))
+        (with-current-buffer buf (setq mode-line-format nil)))
+      ;; PERF,UX: Premature redisplays can substantially affect startup times and
+      ;;   produce ugly flashes of unstyled Emacs.
+      (setq-default inhibit-redisplay t
+                    inhibit-message t)
+      ;; COMPAT: Then reset it with advice, because `startup--load-user-init-file'
+      ;;   will never be interrupted by errors. And if these settings are left
+      ;;   set, Emacs could appear frozen or garbled.
+      (defun doom--reset-inhibited-vars-h ()
+        (setq-default inhibit-redisplay nil
+                      ;; Inhibiting `message' only prevents redraws and
+                      inhibit-message nil)
+        (redraw-frame))
+      (add-hook 'after-init-hook #'doom--reset-inhibited-vars-h)
+      (define-advice startup--load-user-init-file (:after (&rest _) undo-inhibit-vars)
+        (when init-file-had-error
+          (doom--reset-inhibited-vars-h))
+        (unless (default-toplevel-value 'mode-line-format)
+          (setq-default mode-line-format (get 'mode-line-format 'initial-value))))
 
-    ;; PERF: Unset a non-trivial list of command line options that aren't
-    ;;   relevant to our current OS, but `command-line-1' still processes.
-    (unless IS-MAC
-      (setq command-line-ns-option-alist nil))
-    (when (or IS-MAC IS-WINDOWS)
-      (setq command-line-x-option-alist nil))))
+      ;; PERF: Doom disables the UI elements by default, so that there's less for
+      ;;   the frame to initialize. However, the toolbar is still populated
+      ;;   regardless, so I lazy load it until tool-bar-mode is actually used.
+      (advice-add #'tool-bar-setup :override #'ignore)
+      (define-advice startup--load-user-init-file (:before (&rest _) defer-tool-bar-setup)
+        (advice-remove #'tool-bar-setup #'ignore)
+        (add-transient-hook! 'tool-bar-mode (tool-bar-setup)))
 
+      ;; PERF: Unset a non-trivial list of command line options that aren't
+      ;;   relevant to our current OS, but `command-line-1' still processes.
+      (unless IS-MAC
+        (setq command-line-ns-option-alist nil))
+      (unless (memq initial-window-system '(x pgtk))
+        (setq command-line-x-option-alist nil)))))
+
+
+;;
+;;; `doom-context'
+
+(defvar doom-context '(t)
+  "A list of symbols identifying all active Doom execution contexts.
+
+This should never be directly changed, only let-bound, and should never be
+empty. Each context describes what phase Doom is in, and may respond to.
+
+All valid contexts:
+  cli        -- while executing a Doom CLI
+  compile    -- while byte-compilation is in progress
+  eval       -- during inline evaluation of elisp
+  init       -- while doom is formally starting up for the first time, after its
+                core libraries are loaded, but before user config is.
+  modules    -- while loading modules and their files
+  sandbox    -- This session was launched from Doom's sandbox.
+  packages   -- when packagedefs are being read
+  reload     -- while reloading doom")
+(put 'doom-context 'valid-values '(cli compile eval init modules packages reload sandbox))
+(put 'doom-context 'risky-local-variable t)
+
+(defun doom-context--check (context)
+  (let ((valid (get 'doom-context 'valid-values)))
+    (unless (memq context valid)
+      (signal 'doom-context-error
+              (list context "Unrecognized context" valid)))))
+
+(defun doom-context-p (context)
+  "Return t if CONTEXT is active (i.e. in `doom-context')."
+  (if (memq context doom-context) t))
+
+(defun doom-context-push (context)
+  "Add CONTEXT to `doom-context', if it isn't already.
+
+Return non-nil if successful. Throws an error if CONTEXT is invalid."
+  (unless (memq context doom-context)
+    (doom-context--check context)
+    (doom-log ":context: +%s %s" context doom-context)
+    (push context doom-context)))
+
+(defun doom-context-pop (context &optional strict?)
+  "Remove CONTEXT from `doom-context'.
+
+Return non-nil if successful. If STRICT? is non-nil, throw an error if CONTEXT
+wasn't active when this was called."
+  (if (not (doom-context-p context))
+      (when strict?
+        (signal 'doom-context-error
+                (list doom-context "Attempt to pop missing context" context)))
+    (doom-log ":context: -%s %s" context doom-context)
+    (setq doom-context (delq context doom-context))))
+
+(defmacro doom-context-with (contexts &rest body)
+  "Evaluate BODY with CONTEXT added to `doom-context'."
+  (declare (indent 1))
+  `(let ((doom-context doom-context))
+     (dolist (context (ensure-list ,contexts))
+       (doom-context-push context))
+     ,@body))
 
 
 ;;
@@ -519,8 +610,7 @@ Otherwise, `en/disable-command' (in novice.el.gz) is hardcoded to write them to
 ;; defvaralias, which are done because ensuring aliases are created before
 ;; packages are loaded is an unneeded and unhelpful maintenance burden. Emacs
 ;; still aliases them fine regardless.
-(with-eval-after-load 'warnings
-  (add-to-list 'warning-suppress-types '(defvaralias)))
+(setq warning-suppress-types '(defvaralias))
 
 ;; Reduce debug output unless we've asked for it.
 (setq debug-on-error init-file-debug
@@ -557,27 +647,26 @@ Otherwise, `en/disable-command' (in novice.el.gz) is hardcoded to write them to
 ;;; Custom hooks
 
 (defcustom doom-before-init-hook ()
-  "A hook run before Doom has been initialized and before $DOOMDIR/init.el.
+  "A hook run after Doom's core has initialized; before user configuration.
 
-This occurs in the context of early-init.el. Much of Emacs and Doom isn't
-initialized at this point, only loaded. Use this for configuration at the latest
-opportunity before the session becomes unpredictably complicated by user config,
-packages, etc.
-
-Do not use this for interactive functionality, as it's triggered in
-noninteractive sessions as well, after Doom core has been loaded, but not
-initialized.
+This is triggered right before $DOOMDIR/init.el is loaded, in the context of
+early-init.el. Use this for configuration at the latest opportunity before the
+session becomes unpredictably complicated by user config, packages, etc. This
+runs in both interactive and non-interactive contexts, so guard hooks
+appropriately against `noninteractive' or the `cli' context (see
+`doom-context').
 
 In contrast, `before-init-hook' is run just after $DOOMDIR/init.el is loaded,
-but before the rest of Doom is loaded."
+but long before your modules and $DOOMDIR/config.el are loaded."
   :group 'doom
   :type 'hook)
 
 (defcustom doom-after-init-hook ()
-  "A hook run at the (true) end of Emacs startup.
+  "A hook run once Doom's core and modules, and the user's config are loaded.
 
-When this runs, all modules, config files, and startup hooks have been
-triggered. This is the absolute latest point in the startup process."
+This triggers at the absolutel atest point in the eager startup process, and
+runs in both interactive and non-interactive sessions, so guard hooks
+appropriately against `noninteractive' or the `cli' context."
   :group 'doom
   :type 'hook)
 
@@ -585,16 +674,25 @@ triggered. This is the absolute latest point in the startup process."
 ;;
 ;;; Last minute initialization
 
-(add-hook! 'doom-before-init-hook
-  (defun doom--set-initial-values-h ()
-    ;; Remember these variables' initial values, so we can safely reset them at
-    ;; a later time, or consult them without fear of contamination.
-    (dolist (var '(exec-path load-path process-environment))
-      (put var 'initial-value (default-toplevel-value var)))))
+(add-hook! 'doom-before-init-hook :depth -105
+  (defun doom--begin-init-h ()
+    "Begin the startup process."
+    (when (doom-context-push 'init)
+      ;; Remember these variables' initial values, so we can safely reset them at
+      ;; a later time, or consult them without fear of contamination.
+      (dolist (var '(exec-path load-path process-environment))
+        (put var 'initial-value (default-toplevel-value var))))))
 
-;; This is the absolute latest a hook can run in Emacs' startup process.
-(define-advice command-line-1 (:after (&rest _) run-after-init-hook)
-  (doom-run-hooks 'doom-after-init-hook))
+(add-hook! 'doom-after-init-hook :depth 105
+  (defun doom--end-init-h ()
+    "Set `doom-init-time'."
+    (when (doom-context-pop 'init)
+      (setq doom-init-time (float-time (time-subtract (current-time) before-init-time))))))
+
+(unless noninteractive
+  ;; This is the absolute latest a hook can run in Emacs' startup process.
+  (define-advice command-line-1 (:after (&rest _) run-after-init-hook)
+    (doom-run-hooks 'doom-after-init-hook)))
 
 (provide 'doom)
 ;;; doom.el ends here

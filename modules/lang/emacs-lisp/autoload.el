@@ -13,8 +13,12 @@ to a pop up buffer."
           (debug-on-error t))
       (unwind-protect
           (condition-case-unless-debug e
-              (let ((doom--current-module (ignore-errors (doom-module-from-path buffer-file-name))))
-                (eval-region beg end buffer load-read-function)
+              (doom-module-context-with
+                  (doom-module-from-path
+                   (or (buffer-file-name (buffer-base-buffer))
+                       default-directory))
+                (doom-context-with 'eval
+                  (eval-region beg end buffer load-read-function))
                 (with-current-buffer buffer
                   (let ((pp-max-width nil))
                     (require 'pp)
@@ -298,8 +302,7 @@ This generally applies to your private config (`doom-user-dir') or Doom's source
                         (progn
                           (require 'doom)
                           (require 'doom-cli)
-                          (require 'doom-start)
-                          (defmacro map! (&rest _)))
+                          (require 'doom-start))
                       (error
                        (princ
                         (format "%s:%d:%d:Error:Failed to load Doom: %s\n"

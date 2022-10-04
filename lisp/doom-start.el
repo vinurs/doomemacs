@@ -2,21 +2,26 @@
 ;;; Commentary:
 ;;; Code:
 
-
 ;;
 ;;; Custom hooks
 
-(defvar doom-first-input-hook nil
-  "Transient hooks run before the first user input.")
-(put 'doom-first-input-hook 'permanent-local t)
+(defcustom doom-first-input-hook ()
+  "Transient hooks run before the first user input."
+  :type 'hook
+  :local 'permenant-local
+  :group 'doom)
 
-(defvar doom-first-file-hook nil
-  "Transient hooks run before the first interactively opened file.")
-(put 'doom-first-file-hook 'permanent-local t)
+(defcustom doom-first-file-hook ()
+  "Transient hooks run before the first interactively opened file."
+  :type 'hook
+  :local 'permenant-local
+  :group 'doom)
 
-(defvar doom-first-buffer-hook nil
-  "Transient hooks run before the first interactively opened buffer.")
-(put 'doom-first-buffer-hook 'permanent-local t)
+(defcustom doom-first-buffer-hook ()
+  "Transient hooks run before the first interactively opened buffer."
+  :type 'hook
+  :local 'permenant-local
+  :group 'doom)
 
 
 ;;
@@ -115,7 +120,7 @@
 ;;   focus when it is started, among other things, so enable the menu-bar for
 ;;   GUI frames, but keep it disabled in terminal frames because there it
 ;;   activates an ugly, in-frame menu bar.
-(when IS-MAC
+(eval-when! IS-MAC
   (add-hook! '(window-setup-hook after-make-frame-functions)
     (defun doom-restore-menu-bar-in-gui-frames-h (&optional frame)
       (when-let (frame (or frame (selected-frame)))
@@ -257,9 +262,6 @@ If this is a daemon session, load them all immediately instead."
 ;;
 ;;; Benchmark
 
-(defvar doom-init-time nil
-  "The time it took, in seconds, for Doom Emacs to initialize.")
-
 (defun doom-display-benchmark-h (&optional return-p)
   "Display a benchmark including number of packages and modules loaded.
 
@@ -268,9 +270,7 @@ If RETURN-P, return the message as a string instead of displaying it."
            "Doom loaded %d packages across %d modules in %.03fs"
            (- (length load-path) (length (get 'load-path 'initial-value)))
            (hash-table-count doom-modules)
-           (or doom-init-time
-               (setq doom-init-time
-                     (float-time (time-subtract (current-time) before-init-time))))))
+           doom-init-time))
 
 
 ;;
@@ -302,7 +302,7 @@ If RETURN-P, return the message as a string instead of displaying it."
   (doom-load-envvars-file doom-env-file 'noerror))
 
 ;;; Last minute setup
-(add-hook 'doom-after-init-hook #'doom-load-packages-incrementally-h)
+(add-hook 'doom-after-init-hook #'doom-load-packages-incrementally-h 100)
 (add-hook 'doom-after-init-hook #'doom-display-benchmark-h 110)
 (doom-run-hook-on 'doom-first-buffer-hook '(find-file-hook doom-switch-buffer-hook))
 (doom-run-hook-on 'doom-first-file-hook   '(find-file-hook dired-initial-position-hook))
@@ -318,7 +318,7 @@ If RETURN-P, return the message as a string instead of displaying it."
 
 ;;; Load $DOOMDIR/init.el early
 ;; TODO: Catch errors
-(doom-load (file-name-concat doom-user-dir doom-module-init-file) t)
+(load! (string-remove-suffix ".el" doom-module-init-file) doom-user-dir t)
 
 ;;; Load the rest of $DOOMDIR + modules if noninteractive
 ;; If the user is loading this file from a batch script, let's assume they want
@@ -365,11 +365,7 @@ If RETURN-P, return the message as a string instead of displaying it."
                    ;; time, and by keeping a history of them, you get a snapshot
                    ;; of your config in time.
                    (file-name-concat
-                    doom-profile-dir (format "init.%d.elc" emacs-major-version)))
-                  ;; If the config is being reloaded, let's pretend it hasn't be
-                  ;; initialized by unsetting this (see note in
-                  ;; `doom-profile--generate-load-modules' for details).
-                  doom-init-time)
+                    doom-profile-dir (format "init.%d.elc" emacs-major-version))))
               ;; If `user-init-file' is t, then `load' will store the name of
               ;; the next file it loads into `user-init-file'.
               (setq user-init-file t)

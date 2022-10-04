@@ -116,15 +116,12 @@ all hooks after it are ignored.")
 ;;
 ;;; General + leader/localleader keys
 
-(use-package general
-  :init
-  ;; Convenience aliases
-  (defalias 'define-key! #'general-def)
-  (defalias 'undefine-key! #'general-unbind)
-  :config
-  ;; Prevent "X starts with non-prefix key Y" errors except at startup.
-  (add-hook 'doom-after-modules-config-hook #'general-auto-unbind-keys))
-
+(require 'general)
+;; Convenience aliases
+(defalias 'define-key! #'general-def)
+(defalias 'undefine-key! #'general-unbind)
+;; Prevent "X starts with non-prefix key Y" errors except at startup.
+(add-hook 'doom-after-init-modules-hook #'general-auto-unbind-keys)
 
 ;; HACK: `map!' uses this instead of `define-leader-key!' because it consumes
 ;;   20-30% more startup time, so we reimplement it ourselves.
@@ -203,7 +200,7 @@ localleader prefix."
 
 ;; Bind `doom-leader-key' and `doom-leader-alt-key' as late as possible to give
 ;; the user a chance to modify them.
-(add-hook! 'after-init-hook
+(add-hook! 'doom-after-init-hook
   (defun doom-init-leader-keys-h ()
     "Bind `doom-leader-key' and `doom-leader-alt-key'."
     (let ((map general-override-mode-map))
