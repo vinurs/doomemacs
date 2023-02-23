@@ -27,7 +27,14 @@
                    clojurec-mode
                    clojurescript-mode
                    clojurex-mode))
-        (add-to-list 'lsp-language-id-configuration (cons m "clojure"))))))
+        (add-to-list 'lsp-language-id-configuration (cons m "clojure")))))
+
+  (when (modulep! +tree-sitter)
+    (add-hook! '(clojure-mode-local-vars-hook
+                 clojurec-mode-local-vars-hook
+                 clojurescript-mode-local-vars-hook)
+               :append
+               #'tree-sitter!)))
 
 
 (use-package! cider
@@ -130,7 +137,7 @@
       (defun +clojure--cider-connected-update-modeline ()
         "Update modeline with cider connection state."
         (let* ((connected (cider-connected-p))
-               (face (if connected 'warning 'breakpoint-disabled))
+               (face (if connected 'warning 'shadow))
                (label (if connected "Cider connected" "Cider disconnected")))
           (+clojure--cider-set-modeline face label))))
 

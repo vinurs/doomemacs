@@ -150,7 +150,7 @@ orderless."
    :preview-key "C-SPC")
   (consult-customize
    consult-theme
-   :preview-key (list (kbd "C-SPC") :debounce 0.5 'any))
+   :preview-key (list "C-SPC" :debounce 0.5 'any))
   (when (modulep! :lang org)
     (defvar +vertico--consult-org-source
       (list :name     "Org Buffer"
@@ -187,10 +187,15 @@ orderless."
   (when (modulep! :tools docker)
     (defun +vertico--consult-dir-docker-hosts ()
       "Get a list of hosts from docker."
-      (when (require 'docker-tramp nil t)
+      (when (if (>= emacs-major-version 29)
+                (require 'tramp-container nil t)
+              (setq-local docker-tramp-use-names t)
+              (require 'docker-tramp nil t))
         (let ((hosts)
-              (docker-tramp-use-names t))
-          (dolist (cand (docker-tramp--parse-running-containers))
+              (docker-query-fn #'docker-tramp--parse-running-containers))
+          (when (>= emacs-major-version 29)
+            (setq docker-query-fn #'tramp-docker--completion-function))
+          (dolist (cand (funcall docker-query-fn))
             (let ((user (unless (string-empty-p (car cand))
                           (concat (car cand) "@")))
                   (host (car (cdr cand))))
