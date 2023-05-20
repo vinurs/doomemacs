@@ -53,3 +53,6 @@ flycheck_*.el
 /var/
 
 librime/
+
+history
+recentf
