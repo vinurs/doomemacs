@@ -14,10 +14,11 @@
 (package! parseedn :pin "a09686fbb9113b8b1b4f20c9e1dc0d6fea01a64f")
 
 ;;; Core packages
-(package! clojure-mode :pin "906d6a47a646d1191eaead6f8e1ae0810aa9b626")
-(package! clj-refactor :pin "740747dc175f578b255dae6ed87bf8a438431096")
-(package! cider :pin "bc8903b0c85cf0891f106337eabfc6f747d262a1")
-(when (modulep! :checkers syntax)
+(package! clojure-mode :pin "3453cd229b412227aaffd1dc2870fa8fa213c5b1")
+(package! clj-refactor :pin "b5abe655e572a6ecfed02bb8164b64716ef76b8e")
+(package! cider :pin "1ed5163433c991c00ea83fdd4447e8daf4aeccbe")
+(when (and (modulep! :checkers syntax)
+           (not (modulep! :checkers syntax +flymake)))
   (package! flycheck-clj-kondo :pin "ff7bed2315755cfe02ef471edf522e27b78cd5ca"))
 (package! jet :pin "f007660c568e924e32d486a02aa4cd18203313cc")
 (package! neil
