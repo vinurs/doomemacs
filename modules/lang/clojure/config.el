@@ -16,6 +16,8 @@
 (use-package! clojure-mode
   :hook (clojure-mode . rainbow-delimiters-mode)
   :config
+  (set-formatter! 'cljfmt '("cljfmt" "fix" "-") :modes '(clojure-mode clojurec-mode clojurescript-mode))
+
   (when (modulep! +lsp)
     (add-hook! '(clojure-mode-local-vars-hook
                  clojurec-mode-local-vars-hook
@@ -134,7 +136,7 @@
       "Update repl icon on modeline with cider information."
       (setq cider-modeline-icon (concat
                                  " "
-                                 (+modeline-format-icon 'faicon "terminal" "" face label -0.0575)
+                                 (+modeline-format-icon 'faicon "nf-fa-terminal" "" face label -0.0575)
                                  " "))
       (add-to-list 'global-mode-string
                    '(t (:eval cider-modeline-icon))

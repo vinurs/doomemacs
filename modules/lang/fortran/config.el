@@ -35,6 +35,8 @@
         :desc "build" "b" #'+fortran/build
         :desc "run"   "r" #'+fortran/run)
 
+  (set-formatter! 'fprettify '("fprettify" "-") :modes '(f90-mode fortran-mode))
+
   (when (modulep! +intel)
     (map! :map f90-mode-map
           :localleader
@@ -47,6 +49,7 @@
       ["Compile" +fortran/build :active t :help "Compile the Project"]
       ["Run" +fortran/run :active t :help "Run the Executable"]
       ["Test" +fortran/fpm-test :active (+fortran--fpm-toml) :help "Run the Unit Tests"])))
+
 
 (use-package! fortran
   ;; The `.for' extension is automatically recognized by Emacs and invokes
