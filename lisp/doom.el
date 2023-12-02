@@ -119,9 +119,9 @@
 (let ((inhibit-changing-match-data t))
   (if (string-match "HARFBUZZ" system-configuration-features) ; no alternative
       (push 'harfbuzz features)))
-;; `native-compile' exists whether or not it is functional (e.g. libgcc is
-;; available or not). This seems silly, so pretend it doesn't exist if it
-;; isn't available.
+;; The `native-compile' feature exists whether or not it is functional (e.g.
+;; libgcc is available or not). This seems silly, so pretend it doesn't exist if
+;; it isn't functional.
 (if (featurep 'native-compile)
     (if (not (native-comp-available-p))
         (delq 'native-compile features)))
@@ -696,6 +696,16 @@ appropriately against `noninteractive' or the `cli' context."
 
 ;;
 ;;; Last minute initialization
+
+(when (daemonp)
+  (message "Starting Doom Emacs in daemon mode!")
+  (unless doom-inhibit-log
+    (add-hook! 'doom-after-init-hook :depth 106
+      (unless doom-inhibit-log
+        (setq doom-inhibit-log (not (or noninteractive init-file-debug))))
+      (message "Disabling verbose mode. Have fun!"))
+    (add-hook! 'kill-emacs-hook :depth 110
+      (message "Killing Emacs. Sayonara!"))))
 
 (add-hook! 'doom-before-init-hook :depth -105
   (defun doom--begin-init-h ()
